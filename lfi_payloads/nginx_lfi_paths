@@ -1,0 +1,6 @@
+/etc/nginx.conf
+/etc/nginx/nginx.conf
+/etc/nginx/sites-available/default
+/etc/nginx/sites-enabled/default
+/usr/local/nginx/conf/nginx.conf
+/usr/local/etc/nginx/nginx.conf
