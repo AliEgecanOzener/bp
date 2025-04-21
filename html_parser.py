@@ -1,4 +1,3 @@
-
 def parse_element(element):
     if element.name == "input":
        return input_element_parse(element)
@@ -13,6 +12,7 @@ def input_element_parse(input_element):
         "name": input_element.get('name'),
         "value": input_element.get('value'),
         "maxlength": input_element.get('maxlength'),
+        "accept": input_element.get('accept'),
         "required": input_element.get("required"),
         "autocomplete": input_element.get("autocomplete"),
         "pattern": input_element.get('pattern')
@@ -53,5 +53,3 @@ def form_parse(html_content):
         all_form_list.append(form_dict)
         print(all_form_list)
     return all_form_list, form_count
-
-

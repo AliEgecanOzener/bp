@@ -1,4 +1,4 @@
-import re
+import socket
 import random
 import string
 import requests
@@ -10,46 +10,6 @@ def url_validation_check(url):
         return True
     else:
         return False
-    
-
-def convert_string_to_dict(data):
-    if data is None:
-        return None
-    if isinstance(data, dict):
-        return dict(data)
-    if not isinstance(data, str):
-        return None
-    
-
-    data = data.strip()
-    converted = {}
-    pairs = data.split("\n")
-
-    for pair in pairs:
-        pair = pair.strip()
-        if ":" in pair:
-            key, value = pair.split(":")
-            key = key.strip()
-            value = value.strip()
-            converted[key] = value
-        elif "=" in pair:
-            key, value = pair.split("=")
-            key = key.strip()
-            value = value.strip()
-            converted[key] = value
-
-    return converted
-
-
-def user_parameter_extract(string):
- user_parameter_set = set()
- if string != '':
-  for parameter in string.split(','):
-   parameter = parameter.strip()
-   user_parameter_set.add(parameter)
-  return user_parameter_set
- else:
-  return None
  
 
 def convert_string_to_dict(data):
@@ -109,22 +69,25 @@ def get_query(url, cookie, header):
     try:
         session = requests.Session()
         response = session.get(url, cookies=cookie, headers=header, timeout=10)
-        if response.status_code != 200:
-            print(response.status_code)
-        return response if response.status_code == 200 else None
+        return response
 
     except requests.exceptions.Timeout:
-        print(colored("[-] Request timed out.", "red"))
-
+            print(colored("[-] Request timed out.", "red"))
+            raise
     except requests.exceptions.ConnectionError:
-        print(colored("[-] Connection error occurred.", "red"))
+            print(colored("[-] Connection error occurred.", "red"))
+            raise
+
     except requests.exceptions.HTTPError as e:
-        print(colored(f"[-] HTTP error: {e}", "red"))
+            print(colored(f"[-] HTTP error: {e}", "red"))
+            raise
+
     except requests.exceptions.RequestException as e:
-        print(colored(f"[-] Unexpected error: {e}", "red"))
+            print(colored(f"[-] Unexpected error: {e}", "red"))
+            raise
 
 
-def post_query(url, cookie, header, data):
+def post_query(url, cookie, header, data, file):
 
     if isinstance(cookie, str):
         cookie = convert_string_to_dict(cookie) or {}
@@ -134,9 +97,13 @@ def post_query(url, cookie, header, data):
 
     try:
         session = requests.Session()
-        response = session.post(url, cookies=cookie, headers=header, data=data, timeout=10)
 
-        return response if response.status_code == 200 else None
+        if file:
+            response = session.post(url, cookies=cookie, headers=header, data=data, files=file, timeout=10)
+        else:
+            response = session.post(url, cookies=cookie, headers=header, data=data, timeout=10)
+
+        return response
 
     except requests.exceptions.Timeout:
         print(colored("[-] Request timed out.", "red"))
@@ -149,7 +116,7 @@ def post_query(url, cookie, header, data):
 
 
 def cmd_output(cmd):
-    cmd = cmd.replace("\n","").replace("\r","")
+
     first_delimiter = "first_delimiter"
     last_delimiter = "last_delimiter"
     if first_delimiter in cmd and last_delimiter in cmd:
@@ -168,3 +135,34 @@ def get_random_user_agent():
     except FileNotFoundError:
         print(colored("[-] File Not found.","red"))
         return None
+
+
+def check_port(host, port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1)
+
+    try:
+        sock.connect((host, port))
+    except (socket.timeout, socket.error):
+
+        return False
+    else:
+        return True
+    finally:
+        sock.close()
+
+
+def get_port():
+    while True:
+        port_input = input(colored("\n[*] Enter a port number (default is 4545): ", "yellow")).strip()
+        port = int(port_input) if port_input else 4545
+
+        if 1 <= port <= 65535:
+            if check_port("127.0.0.1", port):
+                print(colored(f"[*] Port {port} is already in use. Try another port.", "yellow"))
+            else:
+                return port
+        else:
+            print(colored("[!] Invalid port number. Please enter a valid port between 1 and 65535.", "red"))
+
+

@@ -5,13 +5,10 @@ import nmap
 import requests
 from urllib.parse import urlparse
 from utils import get_query, get_random_user_agent
-from cookies import cookie
 from bs4 import BeautifulSoup
 
 
-def parsed_post_data(data):
-    parsed_data = {data_value.split('=')[0].strip(): data_value.split('=')[1].strip() for data_value in data.split('&')}
-    return parsed_data
+
 
 
 def get_ip_info(url):
@@ -51,7 +48,7 @@ def get_os_info(url):
     else:
         print("Couldn't get OS info")
 
-    r = get_query(url, cookie ,get_random_user_agent())
+    r = get_query(url, "" ,get_random_user_agent())
     headers = r.headers
     powered_by_info = headers.get("X-Powered-By", "").lower()
 
@@ -93,5 +90,3 @@ def get_tech_stack(url):
         print(f"[+] Detected technologies: {data_dict}")
     return data_dict
 
-#user_parameters_raw = "textfile , text-file-viewer-php-submit-button    ,    page"
-#get_tech_stack("https://builtwith.com/")

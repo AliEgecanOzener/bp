@@ -1,8 +1,7 @@
-from check_target import url
 from urllib.parse import urlparse, parse_qs
 from utils import get_query
 from bs4 import BeautifulSoup
-from cookies import cookie
+
 
 def analyze_form_fields(cookie, header):
     url = input("URL: ")
@@ -12,20 +11,24 @@ def analyze_form_fields(cookie, header):
        soup = soup.prettify()
        form_start = "<form>"
        form_end = "</form>"
-       soup = soup.split(form_start)[0]
-       soup = soup.split(form_end)[-1]
+       soup = form_start + soup.split(form_start)[0]
+       soup = soup.split(form_end)[-1] + form_end
        print(soup)
 
 
-def user_parameter_extract(uparams):
+def user_parameter_extract(string):
     user_parameter_set = set()
-    if uparams != '':
-        for parameter in uparams:
+    if string != '':
+        for parameter in string.split(','):
             parameter = parameter.strip()
             user_parameter_set.add(parameter)
         return user_parameter_set
     else:
         return None
+
+def parsed_post_data(data):
+    parsed_data = {data_value.split('=')[0].strip(): data_value.split('=')[1].strip() for data_value in data.split('&')}
+    return parsed_data
 
 
 def valid_user_params(url, user_parameters_set):
@@ -33,6 +36,11 @@ def valid_user_params(url, user_parameters_set):
     matched = url_parameters & user_parameters_set
     return matched
 
+def is_user_get_parameter_valid(url, user_parameters_string):
+ url_parameters = set(parse_qs(urlparse(url).query).keys())
+ user_parameters_set= set(user_parameters_string.strip().split(","))
+ matched = url_parameters & user_parameters_set
+ return matched if matched else None
 
 def post_data_extract(post_data):
     if not post_data:
@@ -41,7 +49,7 @@ def post_data_extract(post_data):
     for post_parameter in post_data.strip().split('&'):
         parts = post_parameter.split('=', 1)
         key = parts[0]
-        value = parts[1] if len(parts) > 1 else '' 
+        value = parts[1] if len(parts) > 1 else ''
         data[key] = value
     return data
 
@@ -68,8 +76,3 @@ def compare_matched_params_with_forms(form_list, matched_parameters):
     return attack_parameters
 
 
-def is_user_get_parameter_valid(url, user_parameters_string):
- url_parameters = set(parse_qs(urlparse(url).query).keys())
- user_parameters_set= set(user_parameters_string.strip().split(","))
- matched = url_parameters & user_parameters_set
- return matched if matched else None
