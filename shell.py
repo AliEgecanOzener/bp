@@ -1,6 +1,7 @@
 from pwn import *
 from utils import convert_string_to_dict
 import requests
+
 host = "0.0.0.0"
 
 def shell_session(url, cookie, header, command, port, args):
