@@ -1,14 +1,8 @@
-#import socket
-#import ssl
-#import re
 import nmap
 import requests
 from urllib.parse import urlparse
 from utils import get_query, get_random_user_agent
 from bs4 import BeautifulSoup
-
-
-
 
 
 def get_ip_info(url):
