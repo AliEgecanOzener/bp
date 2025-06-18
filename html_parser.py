@@ -1,8 +1,13 @@
+import requests
+from bs4 import BeautifulSoup
+from termcolor import colored
 def parse_element(element):
     if element.name == "input":
        return input_element_parse(element)
     elif element.name == "select":
        return select_element_parse(element)
+    elif element.name == "textarea":
+        return textarea_element_parse(element)
     else:
         return None
 
@@ -34,22 +39,44 @@ def select_element_parse(select_element):
         select_parameters['options'].append(option_parameters)
     return select_parameters
 
+def textarea_element_parse(textarea_element):
+    return {
+        "type": "textarea",
+        "name": textarea_element.get("name"),
+        "maxlength": textarea_element.get("maxlength"),
+        "required": textarea_element.get("required"),
+        "autocomplete": textarea_element.get("autocomplete")
+    }
+
 def form_parse(html_content):
+    if not html_content or not isinstance(html_content, str):
+        return []
+
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+    except Exception as e:
+        print(colored(f"[!] Error while analyzing: {e}","yellow"))
+        return []
+
     all_form_list = []
-    form_count = 0
-    for form in html_content.findAll('form'):
-        form_count += 1
+    forms = soup.find_all('form')
+
+    if not forms:
+        return all_form_list
+
+    for form in forms:
         form_dict = {
             "method": form.get('method'),
             "action": form.get('action'),
             "enctype": form.get('enctype'),
             "elements": []
         }
-        for element in form.find_all(['input', 'select']):
+        for element in form.find_all(['input', 'select', 'textarea']):
             attributes = parse_element(element)
             if attributes:
                 form_dict['elements'].append(attributes)
 
         all_form_list.append(form_dict)
-        print(all_form_list)
-    return all_form_list, form_count
+
+
+    return all_form_list
