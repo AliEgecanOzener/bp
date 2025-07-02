@@ -37,10 +37,6 @@ if __name__ == "__main__":
     inclusion_parser.add_argument("--keyword", help="Keyword to search in the --extra_files parameter to determine success")
     inclusion_parser.add_argument("--target_os", default="unknown", help="Target operating system (unix/windows/unknown)")
 
-    inclusion_parser.add_argument("--rfi_auto", action="store_true", help="Enable automated RFI test using external source")
-    inclusion_parser.add_argument("--payload_url", help="URL of hosted RFI payload (e.g., https://rfipayload.netlify.app/)")
-    inclusion_parser.add_argument("--rfi_port", type=int, default=8000, help="Port to host local RFI payload")
-
     # Cross Site Scripting (XSS)
     xss_parser = subparsers.add_parser("xss", help="For File Inclusion tests.")
 
@@ -57,13 +53,8 @@ if __name__ == "__main__":
     xss_parser.add_argument("--stored", action="store_true", help="Check for Stored XSS.")
     xss_parser.add_argument("--stored_urls", help="Enter the URL where the Stored XSS occurs")
 
-    xss_parser.add_argument("--dom", action="store_true", help="Check for DOM-Based XSS.")
-    xss_parser.add_argument("--chrome", action="store_true", help="Starts a Chrome browser for scanning DOM XSS.")
-    xss_parser.add_argument("--firefox", action="store_true", help="Starts a Firefox browser for scanning DOM XSS.")
-    xss_parser.add_argument("--headless", action="store_true", help="Starts a headless Firefox or Chrome browser.")
-
     xss_parser.add_argument("--open_browser", action="store_true", help="Displays the page with injected parameters. ")
-    xss_parser.add_argument("--basic_auth", help="Basic authentication credentials with x:x format. (e.g. username:password)")
+   
 
     args = parser.parse_args()
 
